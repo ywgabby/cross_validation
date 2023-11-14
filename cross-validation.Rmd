@@ -1,0 +1,144 @@
+---
+title: "cross_validation"
+author: "Yaduo Wang"
+date: "2023-11-14"
+output: github_document
+---
+
+```{r}
+library(tidyverse)
+library(modelr)
+library(mgcv)
+set.seed(1)
+```
+
+Generate the data.
+```{r}
+nonlin_df = 
+  tibble(
+    id = 1:100,
+    x = runif(100, 0, 1),
+    y = 1 - 10 * (x - .3) ^ 2 + rnorm(100, 0, .3)
+  )
+nonlin_df |> 
+  ggplot(aes(x = x, y = y)) + 
+  geom_point()
+```
+
+Do the train / test split.
+```{r}
+train_df = sample_n(nonlin_df, 80)
+test_df = anti_join(nonlin_df, train_df, by = "id")
+```
+
+```{r}
+ggplot(train_df, aes(x = x, y = y)) + 
+  geom_point() + 
+  geom_point(data = test_df, color = "red")
+```
+
+Fit linear model.
+```{r}
+linear_model = lm(y~x, data = train_df)
+```
+
+quick visualization of the linear model
+
+```{r}
+smooth_mod = mgcv::gam(y ~ s(x), data = train_df)
+wiggly_mod = mgcv::gam(y ~ s(x, k = 30), sp = 10e-6, data = train_df)
+
+train_df |> 
+  add_predictions(linear_model) |> 
+  ggplot(aes(x = x, y = y)) + geom_point() + 
+  geom_line(aes(y = pred), color = "red")+
+  theme_bw()
+```
+
+```{r}
+train_df |> 
+  add_predictions(smooth_mod) |> 
+  ggplot(aes(x = x, y = y)) + geom_point() + 
+  geom_line(aes(y = pred), color = "blue")+
+  theme_bw()
+```
+
+```{r}
+train_df |> 
+  add_predictions(wiggly_mod) |> 
+  ggplot(aes(x = x, y = y)) + geom_point() + 
+  geom_line(aes(y = pred), color = "green")+
+  theme_bw()
+```
+
+```{r}
+train_df |> 
+  gather_predictions(linear_model, smooth_mod, wiggly_mod) |> 
+  mutate(model = fct_inorder(model)) |> 
+  ggplot(aes(x = x, y = y)) + 
+  geom_point() + 
+  geom_line(aes(y = pred), color = "red") + 
+  facet_wrap(~model)+
+  theme_bw()
+```
+
+Root mean square error on testing and training data.
+```{r}
+rmse(linear_model, train_df)
+rmse(linear_model, test_df)
+```
+
+```{r}
+rmse(smooth_mod, train_df)
+rmse(smooth_mod, test_df)
+```
+
+```{r}
+rmse(wiggly_mod, train_df)
+rmse(wiggly_mod, test_df)
+```
+
+CV 
+```{r}
+cv_df = 
+  crossv_mc(nonlin_df, 100)
+```
+
+```{r}
+cv_df |> pull(train) |> nth(1) |> as_tibble()
+```
+
+```{r}
+cv_df =
+  cv_df |> 
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble))
+```
+
+```{r}
+cv_df = 
+  cv_df |> 
+  mutate(
+    linear_mod  = map(train, ~lm(y ~ x, data = .x)),
+    smooth_mod  = map(train, ~mgcv::gam(y ~ s(x), data = .x)),
+    wiggly_mod  = map(train, ~gam(y ~ s(x, k = 30), sp = 10e-6, data = .x))) |> 
+  mutate(
+    rmse_linear = map2_dbl(linear_mod, test, ~rmse(model = .x, data = .y)),
+    rmse_smooth = map2_dbl(smooth_mod, test, ~rmse(model = .x, data = .y)),
+    rmse_wiggly = map2_dbl(wiggly_mod, test, ~rmse(model = .x, data = .y)))
+```
+
+```{r}
+cv_df |> 
+  select(starts_with("rmse")) |> 
+  pivot_longer(
+    everything(),
+    names_to = "model", 
+    values_to = "rmse",
+    names_prefix = "rmse_") |> 
+  mutate(model = fct_inorder(model)) |> 
+  ggplot(aes(x = model, y = rmse)) + geom_violin()+
+  theme_bw()
+```
+
